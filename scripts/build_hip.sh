@@ -103,8 +103,9 @@ if [[ "${MODE}" == "hip" ]]; then
 else
   BUILD_DIR="${REPO_ROOT}/build_graph"
   echo "Configuring HIP Graph build in ${BUILD_DIR}..."
+  echo "HIPCXX=${HIPCXX} HIP_PATH=${HIP_PATH} cmake ${CMAKE_COMMON_ARGS[*]} -DDUMP_DOT=ON -DGGML_HIP_GRAPHS=ON -B ${BUILD_DIR}"
   HIPCXX="${HIPCXX}" HIP_PATH="${HIP_PATH}" \
-    cmake "${CMAKE_COMMON_ARGS[@]}" -DGGML_HIP_GRAPHS=ON -B "${BUILD_DIR}"
+    cmake "${CMAKE_COMMON_ARGS[@]}" -DDUMP_DOT=ON -DGGML_HIP_GRAPHS=ON -B "${BUILD_DIR}"
   echo "Building HIP Graph..."
   cmake --build "${BUILD_DIR}" --config Release -- -j "${JOBS}"
 fi

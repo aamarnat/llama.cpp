@@ -16,9 +16,9 @@ Behavior:
       * Only consider rows from that selected 'rms_norm_f32' entry to the end of the file.
   - For those rows, compute:
       1) time_us = (End_Timestamp - Start_Timestamp) / 1000
-      2) Total_Workgroups = (Grid_Size_X / Workgroup_Size_X) *
-                            (Grid_Size_Y / Workgroup_Size_Y) *
-                            (Grid_Size_Z / Workgroup_Size_Z)
+      2) Total_Workgroups = (Grid_Size_X) *
+                            (Grid_Size_Y) *
+                            (Grid_Size_Z)
          (computed as float; assumes non-zero workgroup sizes)
       3) CU_Utilization = min(Total_Workgroups / Number_of_CUs, 1.0) * 100
 
@@ -44,6 +44,7 @@ import glob
 import os
 import re
 import sys
+import math
 from typing import Dict, Iterator, List, Tuple
 
 
@@ -136,12 +137,12 @@ def compute_metrics(row: Dict[str, str], num_cus: int) -> Tuple[float, float, fl
     gsy = safe_float(row.get("Grid_Size_Y", "0"), 0.0)
     gsz = safe_float(row.get("Grid_Size_Z", "0"), 0.0)
 
-    total_workgroups = (gsx / wsx) * (gsy / wsy) * (gsz / wsz)
+    total_workgroups = (gsx) * (gsy) * (gsz)
 
     if num_cus <= 0:
         cu_utilization = 0.0
     else:
-        cu_utilization = min(total_workgroups / float(num_cus), 1.0) * 100.0
+        cu_utilization = total_workgroups / float(num_cus) / math.ceil(total_workgroups / float(num_cus)) * 100.0
 
     return time_us, total_workgroups, cu_utilization
 

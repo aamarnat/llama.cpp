@@ -143,3 +143,7 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
     target_compile_definitions(llama PUBLIC  LLAMA_SHARED)
 endif()
+
+if (DUMP_DOT)
+    target_compile_definitions(llama PRIVATE DUMP_DOT)
+endif()
