@@ -104,6 +104,7 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
+                        unsigned int n_ubatch,
                        ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);

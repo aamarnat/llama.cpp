@@ -71,6 +71,7 @@ endif()
 # debug
 option(LLAMA_ALL_WARNINGS           "llama: enable all compiler warnings"                   ON)
 option(LLAMA_ALL_WARNINGS_3RD_PARTY "llama: enable all compiler warnings in 3rd party libs" OFF)
+option(DUMP_DOT                     "llama: dump computation graph to .dot files"           OFF)
 
 # build
 option(LLAMA_FATAL_WARNINGS "llama: enable -Werror flag" OFF)
