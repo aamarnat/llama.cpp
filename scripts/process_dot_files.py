@@ -895,6 +895,8 @@ def print_dependency_order_traversal(graph):
     print("="*60 + "\n")
 
 
+=======
+>>>>>>> cc76594c059d7330327aa8f5f2cb070aaa26ccd9
 def format_tensor_size(size):
     """Helper function to format tensor size as string."""
     if size:
