@@ -15,7 +15,7 @@ Usage:
 Notes:
   - Expects:
       ./build_hip/bin/llama-bench
-      ./models/llama3/Llama-3.1-8B-Instruct-BF16.gguf
+      ../models/Llama-3.1-8B-Instruct-BF16.gguf
     Adjust MODEL or BIN if needed.
 """
 import os
@@ -31,9 +31,16 @@ UB_B_VALUES = [2048, 4096, 8192]
 
 # Paths (adjust if your layout differs)
 BASE_DIR = "./prof_dir"
-BIN = "./build/bin/llama-bench"
-MODEL = "./models/Llama-3.1-8B-Instruct-BF16.gguf"
-RUN_TS = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_graph")
+MODEL = "../models/Llama-3.1-8B-Instruct-BF16.gguf"
+TYPE_VAR = "graph"  # set to "graph" for graph, "" for empty string
+
+# Adjust RUN_TS suffix based on TYPE_VAR
+if TYPE_VAR == "graph":
+    RUN_TS = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_graph")
+    BIN = "./build_graph/bin/llama-bench"
+else:
+    RUN_TS = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    BIN = "./build/bin/llama-bench"
 
 def run_combo(p: int, ub: int, b: int) -> None:
     """Run a single combination with rocprofv3 and tee the log."""

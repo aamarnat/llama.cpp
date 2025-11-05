@@ -10,6 +10,7 @@ import argparse
 import glob
 import os
 import re
+from collections import deque
 
 
 def should_remove_node(node_label):
@@ -161,11 +162,28 @@ def extract_node_name_pattern(label):
     """
     Extract the base name pattern from a node label (e.g., 'Kcur-0', 'kq-0').
     Returns the pattern and layer number.
+    Also handles blk.<number> and cache_[kv]_l<number> patterns, returning (None, layer_number).
     """
     # Pattern to match names like "Kcur-0", "kq-15", "Vcur-23", etc.
     match = re.match(r'([A-Za-z_]+)-(\d+)', label)
     if match:
         return match.group(1), int(match.group(2))
+    
+    # If first pattern doesn't match, try blk.<number> pattern
+    blk_match = re.search(r'blk\.(\d+)\.', label)
+    if blk_match:
+        return None, int(blk_match.group(1))
+    
+    # If blk pattern doesn't match, try cache_k_l<number> and cache_v_l<number> patterns
+    cache_match = re.search(r'cache_[kv]_l(\d+)', label)
+    if cache_match:
+        return cache_match.group(0), int(cache_match.group(1))
+
+    # If blk/cache_k/v_l pattern doesn't match, try convert_unary_l<number> patterns patterns
+    convert_match = re.search(r'convert_unary_l(\d+)', label)
+    if convert_match:
+        return None, int(convert_match.group(1))
+    
     return None, None
 
 
@@ -186,21 +204,7 @@ def should_remove_node_by_layer(label, max_layers):
     
     if layer_num is not None and layer_num > max_layers:
         return True
-    
-    # Also check for blk.<number> pattern (e.g., 'blk.15.attn_q.weight')
-    blk_match = re.search(r'blk\.(\d+)\.', label)
-    if blk_match:
-        blk_num = int(blk_match.group(1))
-        if blk_num > max_layers:
-            return True
-    
-    # Also check for cache_k_l<number> and cache_v_l<number> patterns
-    cache_match = re.search(r'cache_[kv]_l(\d+)', label)
-    if cache_match:
-        cache_num = int(cache_match.group(1))
-        if cache_num > max_layers:
-            return True
-    
+
     return False
 
 
@@ -314,7 +318,9 @@ def add_input_output_to_operation_nodes(graph):
     for node in graph.nodes():
         if is_operation_node(graph, node):
             label = get_node_label(graph, node)
+            node_name = extract_node_name(label)
             node_data_type = extract_data_type(label)
+            _, layer_num = extract_node_name_pattern(label)
             
             # Extract operation
             operation = extract_operation_from_label(label)
@@ -457,11 +463,12 @@ def add_input_output_to_operation_nodes(graph):
             # The label format is: "name (type)|number [tensor_size] | <x>operation"
             # We want to add after the operation
             # new_label = f"operation: {operation}\ndata_type: {node_data_type}\ninput: {input_str}\noutput: {output_str}{tensor_data_str}"
-            new_label = f"operation: {operation}\ndata_type: {node_data_type}{tensor_data_str}"
+            new_label = f"node_name: {node_name}\nlayer: {layer_num}\noperation: {operation}\ndata_type: {node_data_type}{tensor_data_str}"
             
             # new_label = label + f'\ninput: {input_str}\noutput: {output_str}{tensor_data_str}'
             
             # Update the node label
+            graph.nodes[node]['old_label'] = graph.nodes[node]['label']
             graph.nodes[node]['label'] = new_label
             nodes_modified += 1
     
@@ -520,6 +527,7 @@ def insert_conversion_nodes_for_mixed_types(graph):
     # Second pass: insert conversion nodes
     for node, parent_types, other_type in nodes_to_process:
         label = get_node_label(graph, node)
+        _, layer_num = extract_node_name_pattern(label)
         node_tensor_size = extract_tensor_size(label)
         node_name = extract_node_name(label)
         
@@ -534,7 +542,7 @@ def insert_conversion_nodes_for_mixed_types(graph):
                 conversion_counter += 1
                 
                 # Create label for conversion node
-                conv_label = f"convert_unary ({parent_type}, {other_type})|{conversion_counter} {format_tensor_size(parent_tensor_size)} | <x>convert_unary"
+                conv_label = f"convert_unary_l{layer_num} ({parent_type}, {other_type})|{conversion_counter} {format_tensor_size(parent_tensor_size)} | <x>convert_unary"
                 
                 # Add the conversion node
                 graph.add_node(conv_node_id, label=conv_label)
@@ -570,7 +578,7 @@ def insert_conversion_nodes_for_mixed_types(graph):
             conversion_counter += 1
             
             # Create label for output conversion node
-            conv_out_label = f"convert_unary ({other_type}, f32)|{conversion_counter} {format_tensor_size(node_tensor_size)} | <x>convert_unary"
+            conv_out_label = f"convert_unary_l{layer_num} ({other_type}, f32)|{conversion_counter} {format_tensor_size(node_tensor_size)} | <x>convert_unary"
             
             # Add the output conversion node
             graph.add_node(conv_out_node_id, label=conv_out_label)
@@ -637,6 +645,254 @@ def remove_non_operation_nodes(graph):
     print(f"Removed {len(nodes_to_remove)} non-operation nodes")
     print(f"Remaining nodes: {graph.number_of_nodes()}")
     print(f"Remaining edges: {graph.number_of_edges()}")
+
+
+def print_topological_sort(graph):
+    """
+    Perform topological sort on the graph and print node names in dependency order.
+    
+    Args:
+        graph: NetworkX DiGraph containing operation nodes
+    """
+    try:
+        print("\n" + "="*60)
+        print("Topological Sort of Operation Nodes:")
+        print("="*60)
+        
+        topo_order = list(nx.topological_sort(graph))
+        
+        for idx, node in enumerate(topo_order, 1):
+            label = get_node_label(graph, node)
+            node_name = extract_node_name(label)
+            operation = extract_operation_from_label(label)
+            
+            # Extract layer information
+            _, layer_num = extract_node_name_pattern(label)
+            
+            # Print node information
+            if operation:
+                print(f"{idx:4d}. {node_name:30s} | Operation: {operation:20s} | Layer: {layer_num}")
+            else:
+                print(f"{idx:4d}. {node_name:30s} | Layer: {layer_num}")
+        
+        print("="*60)
+        print(f"Total operation nodes in topological order: {len(topo_order)}")
+        print("="*60 + "\n")
+        
+    except nx.NetworkXError as e:
+        print(f"Error: Graph contains a cycle, cannot perform topological sort: {e}")
+
+
+def print_dfs_traversal(graph):
+    """
+    Perform DFS (Depth-First Search) traversal on the graph and print node names.
+    Starts from all source nodes (nodes with no incoming edges).
+    
+    Args:
+        graph: NetworkX DiGraph containing operation nodes
+    """
+    print("\n" + "="*60)
+    print("DFS (Depth-First Search) Traversal of Operation Nodes:")
+    print("="*60)
+    
+    # Find all source nodes (nodes with no incoming edges)
+    source_nodes = [node for node in graph.nodes() if graph.in_degree(node) == 0]
+    
+    if not source_nodes:
+        print("Warning: No source nodes found. Graph may contain cycles.")
+        # If no source nodes, just pick the first node
+        if graph.number_of_nodes() > 0:
+            source_nodes = [list(graph.nodes())[0]]
+    
+    visited = set()
+    dfs_order = []
+    
+    # Manual DFS implementation using a stack
+    def dfs_visit(node):
+        """Recursive DFS helper function."""
+        if node in visited:
+            return
+        visited.add(node)
+        dfs_order.append(node)
+        
+        # Visit all successors
+        for neighbor in graph.successors(node):
+            if neighbor not in visited:
+                dfs_visit(neighbor)
+    
+    # Perform DFS from each source node
+    for source in source_nodes:
+        if source not in visited:
+            dfs_visit(source)
+    
+    # Print nodes in DFS order
+    for idx, node in enumerate(dfs_order, 1):
+        label = get_node_label(graph, node)
+        node_name = extract_node_name(label)
+        operation = extract_operation_from_label(label)
+        
+        # Extract layer information
+        _, layer_num = extract_node_name_pattern(label)
+        
+        # Print node information
+        if operation:
+            print(f"{idx:4d}. {node_name:30s} | Operation: {operation:20s} | Layer: {layer_num}")
+        else:
+            print(f"{idx:4d}. {node_name:30s} | Layer: {layer_num}")
+    
+    print("="*60)
+    print(f"Total operation nodes in DFS order: {len(dfs_order)}")
+    print(f"Source nodes: {len(source_nodes)}")
+    print("="*60 + "\n")
+
+
+def print_bfs_traversal(graph):
+    """
+    Perform BFS (Breadth-First Search) traversal on the graph and print node names.
+    Starts from all source nodes (nodes with no incoming edges).
+    
+    Args:
+        graph: NetworkX DiGraph containing operation nodes
+    """
+    print("\n" + "="*60)
+    print("BFS (Breadth-First Search) Traversal of Operation Nodes:")
+    print("="*60)
+    
+    # Find all source nodes (nodes with no incoming edges)
+    source_nodes = [node for node in graph.nodes() if graph.in_degree(node) == 0]
+    
+    if not source_nodes:
+        print("Warning: No source nodes found. Graph may contain cycles.")
+        # If no source nodes, just pick the first node
+        if graph.number_of_nodes() > 0:
+            source_nodes = [list(graph.nodes())[0]]
+    
+    visited = set()
+    bfs_order = []
+    
+    # Use a queue for BFS
+    queue = deque(source_nodes)
+    
+    # Mark all source nodes as visited
+    for source in source_nodes:
+        visited.add(source)
+        bfs_order.append(source)
+    
+    # Perform BFS
+    while queue:
+        current = queue.popleft()
+        
+        # Visit all neighbors
+        for neighbor in graph.successors(current):
+            if neighbor not in visited:
+                visited.add(neighbor)
+                bfs_order.append(neighbor)
+                queue.append(neighbor)
+    
+    # Print nodes in BFS order
+    for idx, node in enumerate(bfs_order, 1):
+        label = get_node_label(graph, node)
+        node_name = extract_node_name(label)
+        operation = extract_operation_from_label(label)
+        
+        # Extract layer information
+        _, layer_num = extract_node_name_pattern(label)
+        
+        # Print node information
+        if operation:
+            print(f"{idx:4d}. {node_name:30s} | Operation: {operation:20s} | Layer: {layer_num}")
+        else:
+            print(f"{idx:4d}. {node_name:30s} | Layer: {layer_num}")
+    
+    print("="*60)
+    print(f"Total operation nodes in BFS order: {len(bfs_order)}")
+    print(f"Source nodes: {len(source_nodes)}")
+    print("="*60 + "\n")
+
+def get_chain_of_children(graph, node, in_degree):
+    """
+    Get the chain of children for a given node.
+    """
+    children = list(graph.successors(node))
+    if len(children) != 1 or in_degree[children[0]] > 1 or not children:
+        return []
+    return [node] + get_chain_of_children(graph, children[0], in_degree)
+
+def print_dependency_order_traversal(graph):
+    """
+    Perform dependency-order traversal with depth-first priority.
+    Only visits a node when ALL of its parents have been visited.
+    When a child becomes ready (all parents visited), it's added to the FRONT
+    of the queue, creating a depth-first exploration pattern.
+    
+    Args:
+        graph: NetworkX DiGraph containing operation nodes
+    """
+    print("\n" + "="*60)
+    print("Dependency-Order Traversal (All Parents First, Depth-First Priority):")
+    print("="*60)
+    
+    # Track in-degree for each node (number of unvisited parents)
+    in_degree = {node: graph.in_degree(node) for node in graph.nodes()}
+    
+    # Find all source nodes (nodes with no incoming edges)
+    ready_queue = deque([node for node, degree in in_degree.items() if degree == 0])
+    
+    visited = set()
+    dependency_order = []
+    
+    if not ready_queue:
+        print("Warning: No source nodes found. Graph may contain cycles.")
+        print("="*60 + "\n")
+        return
+    
+    # Process nodes in dependency order with depth-first priority
+    while ready_queue:
+        # Get the next node whose all parents have been visited
+        current = ready_queue.popleft()
+        
+        if current not in visited:
+            # Visit this node
+            visited.add(current)
+            in_degree[current] = max(0, in_degree[current] - 1)
+            for succ in graph.successors(current):
+                if succ in in_degree:
+                    in_degree[succ] = max(0, in_degree[succ] - 1)
+            dependency_order.append(current)
+            
+            chain = get_chain_of_children(graph, current, in_degree)
+            for node in chain:
+                visited.add(node)
+                # INSERT_YOUR_CODE
+                # Reduce the in_degree of node (simulate "visiting" its parent)
+                if node != current:
+                    in_degree[node] = max(0, in_degree[node] - 1)
+                    # If node has no unvisited parents, add it to ready queue
+                    assert in_degree[node] == 0
+                    dependency_order.append(node)
+                for succ in graph.successors(node):
+                    if succ in in_degree:
+                        in_degree[succ] = max(0, in_degree[succ] - 1)
+        ready_queue = deque([node for node, degree in in_degree.items() if degree == 0 and node not in visited])
+
+    
+    for node in dependency_order:
+        # Print node information
+        # Fix: Get node attributes for operation, node_name, and layer_num per node.
+        node_label = get_node_label(graph, node) if 'get_node_label' in globals() else str(node)
+        operation = extract_operation_from_label(node_label) if 'extract_operation_from_label' in globals() else ""
+        node_name = extract_node_name(node_label) if 'extract_node_name' in globals() else str(node)
+        _, layer_num = extract_node_name_pattern(node_label) if 'extract_node_name_pattern' in globals() else ""
+        idx = dependency_order.index(node) + 1
+
+        if operation:
+            print(f"{idx:4d}. {node_name:30s} | Operation: {operation:20s} | Layer: {layer_num}")
+        else:
+            print(f"{idx:4d}. {node_name:30s} | Layer: {layer_num}")
+    
+    print("="*60)
+    print(f"Total operation nodes in dependency order: {len(dependency_order)}")
+    print("="*60 + "\n")
 
 
 def format_tensor_size(size):
@@ -721,9 +977,6 @@ def process_graph(graph, max_layers=None):
     # Reverse edges for cache_v_l* and cache_k_l* nodes with set_rows
     reverse_cache_set_rows_edges(graph)
     
-    # Add edges from childless Kcur-* to kq-* and childless Vcur-* to kqv-*
-    add_missing_edges(graph)
-    
     # Insert conversion nodes for mixed data types AFTER removing nodes
     insert_conversion_nodes_for_mixed_types(graph)
     
@@ -732,6 +985,15 @@ def process_graph(graph, max_layers=None):
     
     # Remove all non-operation nodes while connecting parents to children
     remove_non_operation_nodes(graph)
+
+    # # Add edges from childless Kcur-* to kq-* and childless Vcur-* to kqv-*
+    add_missing_edges(graph)
+    
+    # # Perform different graph traversals and print node names
+    # # print_topological_sort(graph)
+    # # print_dfs_traversal(graph)
+    # # print_bfs_traversal(graph)
+    print_dependency_order_traversal(graph)
     
     return graph
 
@@ -791,32 +1053,32 @@ def add_missing_edges(graph):
     and from childless Vcur-* nodes to corresponding kqv-* nodes.
     """
     # Build a mapping of node patterns to nodes
-    kcur_nodes = {}  # layer -> node_id
+    kcur_cache_nodes = {}  # layer -> node_id
     kq_nodes = {}    # layer -> node_id
-    vcur_nodes = {}  # layer -> node_id
+    vcur_cache_nodes = {}  # layer -> node_id
     kqv_nodes = {}   # layer -> node_id
     
     for node in graph.nodes():
-        label = get_node_label(graph, node)
+        label = graph.nodes[node]['old_label']
         pattern, layer = extract_node_name_pattern(label)
         
-        if pattern == 'Kcur' and layer is not None:
-            if layer not in kcur_nodes:
-                kcur_nodes[layer] = []
-            kcur_nodes[layer].append(node)
+        if pattern is not None and 'cache_k_l' in pattern and layer is not None:
+            if layer not in kcur_cache_nodes:
+                kcur_cache_nodes[layer] = []
+            kcur_cache_nodes[layer].append(node)
         elif pattern == 'kq' and layer is not None:
             kq_nodes[layer] = node
-        elif pattern == 'Vcur' and layer is not None:
-            if layer not in vcur_nodes:
-                vcur_nodes[layer] = []
-            vcur_nodes[layer].append(node)
+        elif pattern is not None and 'cache_v_l' in pattern and layer is not None:
+            if layer not in vcur_cache_nodes:
+                vcur_cache_nodes[layer] = []
+            vcur_cache_nodes[layer].append(node)
         elif pattern == 'kqv' and layer is not None:
             kqv_nodes[layer] = node
     
     edges_added = 0
     
     # Connect childless Kcur-* to kq-*
-    for layer, kcur_list in kcur_nodes.items():
+    for layer, kcur_list in kcur_cache_nodes.items():
         for kcur_node in kcur_list:
             # Check if this Kcur node has no children
             if graph.out_degree(kcur_node) == 0:
@@ -827,17 +1089,17 @@ def add_missing_edges(graph):
                     edges_added += 1
                     print(f"Added edge: {get_node_label(graph, kcur_node).split('|')[0]} -> {get_node_label(graph, kq_node).split('|')[0]}")
     
-    # Connect childless Vcur-* to kqv-*
-    for layer, vcur_list in vcur_nodes.items():
+    # Connect childless Vcur-* to kq-*
+    for layer, vcur_list in vcur_cache_nodes.items():
         for vcur_node in vcur_list:
             # Check if this Vcur node has no children
-            if graph.out_degree(vcur_node) == 0:
-                # Find corresponding kqv node
-                if layer in kqv_nodes:
-                    kqv_node = kqv_nodes[layer]
-                    graph.add_edge(vcur_node, kqv_node, arrowhead='vee', style='solid', label=f'src 1')
+            # if graph.out_degree(vcur_node) == 0:
+                # Find corresponding kq node
+                if layer in kq_nodes:
+                    kq_node = kq_nodes[layer]
+                    graph.add_edge(vcur_node, kq_node, arrowhead='vee', style='solid', label=f'src 2')
                     edges_added += 1
-                    print(f"Added edge: {get_node_label(graph, vcur_node).split('|')[0]} -> {get_node_label(graph, kqv_node).split('|')[0]}")
+                    print(f"Added edge: {get_node_label(graph, vcur_node).split('|')[0]} -> {get_node_label(graph, kq_node).split('|')[0]}")
     
     print(f"Added {edges_added} missing edges")
 
