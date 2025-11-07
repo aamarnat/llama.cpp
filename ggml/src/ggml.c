@@ -7130,10 +7130,11 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         }
 
         if (grad) {
-            fprintf(fp, " | <g>%s\"; ]\n", ggml_op_symbol(grad->op));
-        } else {
-            fprintf(fp, "\"; ]\n");
+            fprintf(fp, " | <g>%s", ggml_op_symbol(grad->op));
         }
+
+        fprintf(fp, " | <idx>%d", i);
+        fprintf(fp, "\"; ]\n");
     }
 
     for (int i = 0; i < gb->n_leafs; i++) {

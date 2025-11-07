@@ -32,7 +32,7 @@ UB_B_VALUES = [2048, 4096, 8192]
 # Paths (adjust if your layout differs)
 BASE_DIR = "./prof_dir"
 MODEL = "../models/Llama-3.1-8B-Instruct-BF16.gguf"
-TYPE_VAR = "graph"  # set to "graph" for graph, "" for empty string
+TYPE_VAR = ""  # set to "graph" for graph, "" for empty string
 
 # Adjust RUN_TS suffix based on TYPE_VAR
 if TYPE_VAR == "graph":
@@ -48,7 +48,7 @@ def run_combo(p: int, ub: int, b: int) -> None:
     os.makedirs(out_dir, exist_ok=True)
 
     cmd = (
-        f"rocprofv3 --output-format csv --sys-trace -d {out_dir} -- "
+        f"rocprofv3 --output-format csv --sys-trace -d {out_dir} --truncate-kernels -- "
         f"{BIN} -m {MODEL} -r 1 -n 0 -p {p} -ub {ub} -b {b} "
         f"| tee {out_dir}/log.txt"
     )

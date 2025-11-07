@@ -238,7 +238,7 @@ def is_operation_node(graph, node):
 def extract_operation_from_label(label):
     """
     Extract the operation string from a node label.
-    The operation is the string after '| <x>' in the label.
+    The operation is the string after '| <x>' and before '| <idx>' in the label.
     
     Args:
         label: Node label string
@@ -246,10 +246,28 @@ def extract_operation_from_label(label):
     Returns:
         Operation string or None if not found
     """
-    # Extract just the operation part, before any newlines (for input/output info)
-    match = re.search(r'\|\s*<x>([^\n]+)', label)
+    # Extract operation between <x> and <idx>
+    match = re.search(r'\|\s*<x>(.*?)\s*\|\s*<idx>', label)
     if match:
         return match.group(1).strip()
+    return None
+
+
+def extract_idx_from_label(label):
+    """
+    Extract the idx value from a node label.
+    The idx is the numeric value after '<idx>' in the label.
+    
+    Args:
+        label: Node label string
+        
+    Returns:
+        Integer idx value or None if not found
+    """
+    # Extract idx value after <idx>
+    match = re.search(r'<idx>(\d+)', label)
+    if match:
+        return int(match.group(1))
     return None
 
 
@@ -326,6 +344,8 @@ def add_input_output_to_operation_nodes(graph):
             operation = extract_operation_from_label(label)
             if not operation:
                 continue
+
+            idx = extract_idx_from_label(label)
             
             # Extract node's own tensor size
             node_tensor_size = extract_tensor_size(label)
@@ -369,7 +389,7 @@ def add_input_output_to_operation_nodes(graph):
             if operation in simple_format_ops:
                 # Build input string without brackets
                 output_data_str = format_tensor_data(node_tensor_size) if node_tensor_size else 'unknown'
-                tensor_data_str = f'\ntensor_data: ({output_data_str}),({output_data_str})'
+                tensor_data_str = f'({output_data_str}),({output_data_str})'
             elif operation == 'X*Y':
                 # Calculate B, M, N, K for X*Y operation
                 # Check if all parent tensors are 2D or 3D
@@ -421,15 +441,15 @@ def add_input_output_to_operation_nodes(graph):
                         if K is not None and M is not None and N is not None and node_tensor_size:
                             # Assert M and N are in output tensor sizes
                             if len(node_tensor_size) == 2 and M in node_tensor_size and N in node_tensor_size:
-                                tensor_data_str = f'\ntensor_data: ({B}), ({M}, {N}, {K})'
+                                tensor_data_str = f'({B}), ({M}, {N}, {K})'
                             else:
                                 # Assertion failed or output not as expected
-                                tensor_data_str = '\ntensor_data: '
+                                tensor_data_str = ''
                         else:
-                            tensor_data_str = '\ntensor_data: '
+                            tensor_data_str = ''
                     else:
                         # 3D or mixed dimensions - leave blank for now
-                        tensor_data_str = '\ntensor_data: '
+                        tensor_data_str = ''
                         # 3D or mixed dimensions
                         # For 3D tensors, B is the first dimension of the output tensor
                         if len(node_tensor_size) == 3:
@@ -453,23 +473,18 @@ def add_input_output_to_operation_nodes(graph):
                                 else:
                                     K = None
                             if K is not None:
-                                tensor_data_str = f'\ntensor_data: ({B}), ({M}, {N}, {K})'
+                                tensor_data_str = f'({B}), ({M}, {N}, {K})'
                         else:
-                            tensor_data_str = '\ntensor_data: '
+                            tensor_data_str = ''
                 else:
-                    tensor_data_str = '\ntensor_data: '
+                    tensor_data_str = ''
             
+            # Update the node tensor data
+            graph.nodes[node]['tensor_data'] = tensor_data_str
+
             # Add new lines to label
-            # The label format is: "name (type)|number [tensor_size] | <x>operation"
-            # We want to add after the operation
-            # new_label = f"operation: {operation}\ndata_type: {node_data_type}\ninput: {input_str}\noutput: {output_str}{tensor_data_str}"
-            new_label = f"node_name: {node_name}\nlayer: {layer_num}\noperation: {operation}\ndata_type: {node_data_type}{tensor_data_str}"
-            
-            # new_label = label + f'\ninput: {input_str}\noutput: {output_str}{tensor_data_str}'
-            
-            # Update the node label
-            graph.nodes[node]['old_label'] = graph.nodes[node]['label']
-            graph.nodes[node]['label'] = new_label
+            # new_label = f"node_name: {node_name}\nidx: {idx}\nlayer: {layer_num}\noperation: {operation}\ndata_type: {node_data_type}\ntensor_data: {tensor_data_str}"
+            # graph.nodes[node]['label'] = new_label
             nodes_modified += 1
     
     print(f"Modified {nodes_modified} operation nodes with input/output information")
@@ -895,14 +910,80 @@ def print_dependency_order_traversal(graph):
     print("="*60 + "\n")
 
 
-=======
->>>>>>> cc76594c059d7330327aa8f5f2cb070aaa26ccd9
 def format_tensor_size(size):
     """Helper function to format tensor size as string."""
     if size:
         return '[' + ', '.join(str(x) for x in size) + ']'
     return '[unknown]'
 
+def insert_nodes_by_idx_or_mul_position(graph):
+    """
+    Insert nodes into a list based on the idx that can be extracted from the 'old_label'
+    in the node using extract_idx_from_label(). 
+    
+    If extract_idx_from_label returns None for a node, check if the parent or child's
+    extract_operation_from_label returns X*Y. If X*Y is a parent, place the node after
+    its parent in the list. If it's a child, place the node before the X*Y operation node.
+    
+    Args:
+        nodes: List of node IDs to insert
+        graph: NetworkX DiGraph containing the nodes
+        
+    Returns:
+        List of node IDs sorted according to the rules above
+    """
+    # Create a list to store (sort_key, node_id) tuples
+    nodes_with_keys = []
+    
+    for node in graph.nodes():
+        # Get the old_label for this node
+        old_label = graph.nodes[node]['label']
+        
+        # Try to extract idx from the label
+        idx = extract_idx_from_label(old_label)
+        
+        if idx is not None:
+            # Node has an idx, use it as the sort key
+            nodes_with_keys.append((idx, node))
+        else:
+            # No idx found, check parents and children for X*Y operation
+            parent_mul_idx = None
+            child_mul_idx = None
+            
+            # Check parents
+            for parent in graph.predecessors(node):
+                parent_label = graph.nodes[parent]['label']
+                parent_op = extract_operation_from_label(parent_label)
+                if parent_op == "X*Y":
+                    parent_idx = extract_idx_from_label(parent_label)
+                    if parent_idx is not None:
+                        # Place this node after its parent (parent_idx + 0.5)
+                        parent_mul_idx = parent_idx + 0.5
+                        break
+            
+            # Check children
+            for child in graph.successors(node):
+                child_label = graph.nodes[child]['label']
+                child_op = extract_operation_from_label(child_label)
+                if child_op == "X*Y":
+                    child_idx = extract_idx_from_label(child_label)
+                    if child_idx is not None:
+                        # Place this node before the X*Y child (child_idx - 0.5)
+                        child_mul_idx = child_idx - 0.5
+                        break
+            
+            # Determine which position to use
+            if parent_mul_idx is not None:
+                nodes_with_keys.append((parent_mul_idx, node))
+            elif child_mul_idx is not None:
+                nodes_with_keys.append((child_mul_idx, node))
+            else:
+                # No idx and no X*Y parent/child, place at end with infinity
+                nodes_with_keys.append((float('inf'), node))
+    
+    # Sort by the sort key and return just the node IDs
+    nodes_with_keys.sort(key=lambda x: x[0])
+    return [node for _, node in nodes_with_keys]
 
 def process_graph(graph, max_layers=None):
     """
@@ -989,14 +1070,25 @@ def process_graph(graph, max_layers=None):
     remove_non_operation_nodes(graph)
 
     # # Add edges from childless Kcur-* to kq-* and childless Vcur-* to kqv-*
-    add_missing_edges(graph)
+    # add_missing_edges(graph)
     
     # # Perform different graph traversals and print node names
     # # print_topological_sort(graph)
     # # print_dfs_traversal(graph)
     # # print_bfs_traversal(graph)
     print_dependency_order_traversal(graph)
-    
+
+    for idx, node in enumerate(insert_nodes_by_idx_or_mul_position(graph)):
+        graph.nodes[node]['idx'] = idx
+        old_label = get_node_label(graph, node)
+        graph.nodes[node]['operation'] = extract_operation_from_label(old_label)
+        graph.nodes[node]['node_name'] = extract_node_name(old_label)
+        graph.nodes[node]['layer'] = extract_node_name_pattern(old_label)[1]
+        graph.nodes[node]['data_type'] = extract_data_type(old_label)
+
+        # Update the node label
+        tensor_data = graph.nodes[node].get('tensor_data', '')
+        graph.nodes[node]['label'] = f"node_name: {graph.nodes[node]['node_name']}\nidx: {idx}\nlayer: {graph.nodes[node]['layer']}\noperation: {graph.nodes[node]['operation']}\ndata_type: {graph.nodes[node]['data_type']}\ntensor_data: {tensor_data}"
     return graph
 
 
@@ -1061,7 +1153,7 @@ def add_missing_edges(graph):
     kqv_nodes = {}   # layer -> node_id
     
     for node in graph.nodes():
-        label = graph.nodes[node]['old_label']
+        label = graph.nodes[node]['label']
         pattern, layer = extract_node_name_pattern(label)
         
         if pattern is not None and 'cache_k_l' in pattern and layer is not None:
