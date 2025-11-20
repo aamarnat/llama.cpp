@@ -282,7 +282,10 @@ def extract_data_type(label):
     Returns:
         Data type string or None if not found
     """
-    match = re.search(r'\(([^)]+)\)', label)
+    # Find only up to the first '|', then find the last (...) pattern before that
+    head = label.split('|', 1)[0]
+    matches = list(re.finditer(r'\(([^)]+)\)', head))
+    match = matches[-1] if matches else None
     if match:
         return match.group(1).strip()
     return None
@@ -333,6 +336,7 @@ def add_input_output_to_operation_nodes(graph):
     """
     nodes_modified = 0
     
+    nodes = graph.nodes()
     for node in graph.nodes():
         if is_operation_node(graph, node):
             label = get_node_label(graph, node)
@@ -379,6 +383,10 @@ def add_input_output_to_operation_nodes(graph):
             # Format tensor sizes without square brackets for tensor_data
             def format_tensor_data(size):
                 if size:
+                    # Ensure size is of length 3 or more by appending 1s if necessary
+                    size = list(size)
+                    while len(size) < 3:
+                        size.append(1)
                     return ', '.join(str(x) for x in size)
                 return 'unknown'
             
@@ -557,7 +565,7 @@ def insert_conversion_nodes_for_mixed_types(graph):
                 conversion_counter += 1
                 
                 # Create label for conversion node
-                conv_label = f"convert_unary_l{layer_num} ({parent_type}, {other_type})|{conversion_counter} {format_tensor_size(parent_tensor_size)} | <x>convert_unary"
+                conv_label = f"convert_unary_l{layer_num} ({parent_type}, {other_type})|{conversion_counter} {format_tensor_size(parent_tensor_size)} | <x>convert_unary | <idx>"
                 
                 # Add the conversion node
                 graph.add_node(conv_node_id, label=conv_label)
@@ -593,7 +601,7 @@ def insert_conversion_nodes_for_mixed_types(graph):
             conversion_counter += 1
             
             # Create label for output conversion node
-            conv_out_label = f"convert_unary_l{layer_num} ({other_type}, f32)|{conversion_counter} {format_tensor_size(node_tensor_size)} | <x>convert_unary"
+            conv_out_label = f"convert_unary_l{layer_num} ({other_type}, f32)|{conversion_counter} {format_tensor_size(node_tensor_size)} | <x>convert_unary | <idx>"
             
             # Add the output conversion node
             graph.add_node(conv_out_node_id, label=conv_out_label)

@@ -9,6 +9,7 @@ import networkx as nx
 from pathlib import Path
 from typing import List, Dict, Tuple
 import sys
+import argparse
 
 
 class ChunkGraph:
@@ -66,7 +67,7 @@ class ChunkParallelCombiner:
         self.combined_graph = nx.DiGraph()
         self.chunk_mappings = []  # Store node mappings for each chunk
     
-    def load_chunks(self, pattern: str = "llama_*_examen.dot"):
+    def load_chunks(self, pattern: str = "llama_*_ub.dot"):
         """Load all chunk files matching the pattern."""
         files = sorted(self.input_dir.glob(pattern))
         
@@ -76,7 +77,7 @@ class ChunkParallelCombiner:
         
         for filepath in files:
             # Extract chunk index from filename
-            match = re.search(r'llama_(\d+)_examen\.dot', filepath.name)
+            match = re.search(r'llama_(\d+)_ub\.dot', filepath.name)
             if match:
                 chunk_idx = int(match.group(1))
                 chunk = ChunkGraph(chunk_idx, str(filepath))
@@ -353,16 +354,33 @@ class ChunkParallelCombiner:
 def main():
     """Main function."""
     
-    # Configuration
-    script_dir = Path(__file__).parent
-    input_dir = script_dir.parent / "output_dot"
-    output_file = input_dir / "combined_chunk_parallel.dot"
+    # Set up argument parser
+    parser = argparse.ArgumentParser(
+        description="Combine multiple DOT files for chunk-level parallelism using NetworkX."
+    )
     
-    # Allow command line arguments
-    if len(sys.argv) > 1:
-        input_dir = Path(sys.argv[1])
-    if len(sys.argv) > 2:
-        output_file = Path(sys.argv[2])
+    # Default paths
+    script_dir = Path(__file__).parent
+    default_input = script_dir.parent / "output_dot"
+    default_output = script_dir.parent / "output_dot" / "combined_chunk_parallel.dot"
+    
+    parser.add_argument(
+        "-i", "--input",
+        type=str,
+        default=str(default_input),
+        help=f"Input directory containing chunk DOT files (default: {default_input})"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        type=str,
+        default=str(default_output),
+        help=f"Output file path for combined DOT file (default: {default_output})"
+    )
+    
+    args = parser.parse_args()
+    
+    input_dir = Path(args.input)
+    output_file = Path(args.output)
     
     print("="*80)
     print("CHUNK-LEVEL PARALLEL DOT COMBINER (NetworkX)")
