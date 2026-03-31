@@ -33,6 +33,7 @@ UB_B_VALUES = [2048, 4096, 8192]
 BASE_DIR = "./prof_dir"
 MODEL = "../models/Llama-3.1-8B-Instruct-BF16.gguf"
 TYPE_VAR = ""  # set to "graph" for graph, "" for empty string
+NO_TRACE = False  # set to True to skip rocprofv3 and use 5 repetitions
 
 # Adjust RUN_TS suffix based on TYPE_VAR
 if TYPE_VAR == "graph":
@@ -43,15 +44,23 @@ else:
     BIN = "./build/bin/llama-bench"
 
 def run_combo(p: int, ub: int, b: int) -> None:
-    """Run a single combination with rocprofv3 and tee the log."""
+    """Run a single combination, optionally without rocprofv3."""
     out_dir = os.path.join(BASE_DIR, f"{RUN_TS}/p{p}_ub{ub}_b{b}")
     os.makedirs(out_dir, exist_ok=True)
 
-    cmd = (
-        f"rocprofv3 --output-format csv --sys-trace -d {out_dir} --truncate-kernels -- "
-        f"{BIN} -m {MODEL} -r 1 -n 0 -p {p} -ub {ub} -b {b} "
-        f"| tee {out_dir}/log.txt"
-    )
+    repetitions = 5 if NO_TRACE else 1
+
+    if NO_TRACE:
+        cmd = (
+            f"{BIN} -m {MODEL} -r {repetitions} -n 0 -p {p} -ub {ub} -b {b} "
+            f"| tee {out_dir}/log.txt"
+        )
+    else:
+        cmd = (
+            f"rocprofv3 --output-format csv --sys-trace -d {out_dir} --truncate-kernels -- "
+            f"{BIN} -m {MODEL} -r {repetitions} -n 0 -p {p} -ub {ub} -b {b} "
+            f"| tee {out_dir}/log.txt"
+        )
 
     print(f"\n=== Running p={p}, ub={ub}, b={b} ===")
     print(cmd)
@@ -68,7 +77,7 @@ def main() -> None:
     if not os.path.exists(MODEL):
         print(f"ERROR: Model file not found at {MODEL}")
         return
-    if shutil.which("rocprofv3") is None:
+    if not NO_TRACE and shutil.which("rocprofv3") is None:
         print("ERROR: 'rocprofv3' not found in PATH")
         return
 
